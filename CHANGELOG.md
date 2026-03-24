@@ -9,19 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial project structure
-- Core library implementation
-- Unit and integration tests
-- CI/CD pipeline
-- Documentation
-
-## [0.1.0] - YYYY-MM-DD
-
-### Added
-
-- Initial release
-- Basic functionality
-- Documentation and examples
+- Core R-tree spatial index: `MBR`, `RTreeEntry`, `RTreeNode`, `RTree`
+- Insert, search (intersection), and remove operations
+- Input validation: rejects NaN, Infinity, inverted MBR bounds, and M < 2
+- Bounding-box query example (`examples/basic.zig`)
+- Unit tests (22) and integration tests (9) including performance benchmark
+- Integration tests ported from Geode's spatial index test suite
 
 [Unreleased]: https://gitlab.com/devnw/zig/rtree/-/compare/v0.1.0...HEAD
 [0.1.0]: https://gitlab.com/devnw/zig/rtree/-/releases/v0.1.0

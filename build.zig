@@ -41,6 +41,22 @@ pub fn build(b: *std.Build) void {
     const run_integration_tests = b.addRunArtifact(integration_tests);
     integration_step.dependOn(&run_integration_tests.step);
 
+    // Example executable
+    const example_step = b.step("example", "Build and run the basic example");
+    const example = b.addExecutable(.{
+        .name = "rtree-example",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/basic.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "rtree", .module = module },
+            },
+        }),
+    });
+    const run_example = b.addRunArtifact(example);
+    example_step.dependOn(&run_example.step);
+
     // Check step for IDE integration (fast syntax validation)
     const check_step = b.step("check", "Check for compilation errors");
     const check = b.addTest(.{

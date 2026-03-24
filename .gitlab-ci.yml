@@ -21,6 +21,7 @@ include:
 
 variables:
   ZIG_VERSION: "0.15.1"
+  ZIG_SHA256: "c61c5da6edeea14ca51ecd5e4520c6f4189ef5250383db33d01848293bfafe05"
 
 stages:
   - lint
@@ -34,6 +35,7 @@ stages:
 .install-zig: &install-zig
   - apt-get update && apt-get install -y curl xz-utils
   - curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+  - echo "${ZIG_SHA256}  zig.tar.xz" | sha256sum -c -
   - tar -xf zig.tar.xz
   - export PATH="$PWD/zig-linux-x86_64-${ZIG_VERSION}:$PATH"
   - zig version
@@ -81,6 +83,17 @@ test-release-safe:
     - *install-zig
   script:
     - zig build test -Doptimize=ReleaseSafe --summary all
+  needs:
+    - build
+
+# Integration tests at ReleaseSafe
+test-integration-release-safe:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - zig build test-integration -Doptimize=ReleaseSafe --summary all
   needs:
     - build
 

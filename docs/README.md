@@ -2,15 +2,13 @@
 
 ## Overview
 
-A Zig library for rtree
+A standalone, generic R-tree spatial index for Zig.
 
-## Table of Contents
+## Contents
 
-- [Getting Started](getting-started.md)
-- [API Reference](api-reference.md)
-- [Examples](examples.md)
-- [Architecture](architecture.md)
-- [FAQ](faq.md)
+- [Requirements](REQUIREMENTS.md) -- Functional, packaging, and test requirements
+- [Gap Analysis](GAP_ANALYSIS.md) -- Extraction status and gap tracking
+- [Example](../examples/basic.zig) -- Bounding-box query example
 
 ## Quick Links
 

@@ -3,12 +3,12 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Zig](https://img.shields.io/badge/Zig-0.15.1+-orange.svg)](https://ziglang.org/)
 
-A Zig library for rtree
+A standalone, generic R-tree spatial index for Zig.
 
 ## Features
 
 - **Zero Dependencies**: Pure Zig standard library only
-- **Memory Safe**: Proper allocation patterns with no leaks
+- **Input Validated**: Rejects NaN, Infinity, and inverted bounding boxes
 - **Cross-Platform**: Linux, macOS, Windows support
 - **Well Tested**: Comprehensive unit and integration tests
 
@@ -44,11 +44,28 @@ const std = @import("std");
 const rtree = @import("rtree");
 
 pub fn main() !void {
-    try rtree.init(.{
-        .debug = true,
-    });
+    const allocator = std.heap.page_allocator;
+
+    // Create an R-tree with branching factor 8 (M must be >= 2).
+    var tree = try rtree.RTree.init(allocator, 8);
+    defer tree.deinit();
+
+    // Insert bounding boxes with unique ids.
+    try tree.insert(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 1);
+    try tree.insert(.{ .min_x = 5, .min_y = 5, .max_x = 15, .max_y = 15 }, 2);
+
+    // Search for entries intersecting a query rectangle.
+    var results: std.ArrayList(u64) = .empty;
+    defer results.deinit(allocator);
+    try tree.search(.{ .min_x = 7, .min_y = 7, .max_x = 12, .max_y = 12 }, allocator, &results);
+    // results.items contains { 1, 2 }
+
+    // Remove by exact MBR + id.
+    _ = try tree.remove(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 1);
 }
 ```
+
+See [`examples/basic.zig`](examples/basic.zig) for a full runnable example.
 
 ## Requirements
 
@@ -58,16 +75,20 @@ pub fn main() !void {
 
 ```bash
 # Build the library
-make build
+zig build
 
-# Run tests
-make test
+# Run unit tests
+zig build test --summary all
 
-# Quick development iteration
-make dev
+# Run integration tests
+zig build test-integration --summary all
 
-# Full CI pipeline
-make ci
+# Run the example
+zig build example
+
+# Or use Make convenience targets
+make dev    # fmt + check + test
+make ci     # clean + build + all tests
 ```
 
 ## Documentation
