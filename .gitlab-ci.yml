@@ -20,8 +20,8 @@ include:
   - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.7.1
 
 variables:
-  ZIG_VERSION: "0.15.1"
-  ZIG_SHA256: "c61c5da6edeea14ca51ecd5e4520c6f4189ef5250383db33d01848293bfafe05"
+  ZIG_VERSION: "0.15.2"
+  ZIG_SHA256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
 
 stages:
   - lint
@@ -34,10 +34,10 @@ stages:
 # Zig installation template
 .install-zig: &install-zig
   - apt-get update && apt-get install -y curl xz-utils
-  - curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+  - curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
   - echo "${ZIG_SHA256}  zig.tar.xz" | sha256sum -c -
   - tar -xf zig.tar.xz
-  - export PATH="$PWD/zig-linux-x86_64-${ZIG_VERSION}:$PATH"
+  - export PATH="$PWD/zig-x86_64-linux-${ZIG_VERSION}:$PATH"
   - zig version
 
 # Build job
