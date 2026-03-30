@@ -7,11 +7,21 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Dependency: spice thread pool for parallel operations
+    const spice_dep = b.dependency("spice", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const spice_module = spice_dep.module("spice");
+
     // Main library module
     const module = b.addModule("rtree", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "spice", .module = spice_module },
+        },
     });
 
     // Unit tests (run tests defined in the module itself)
@@ -21,6 +31,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "spice", .module = spice_module },
+            },
         }),
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
@@ -35,6 +48,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "rtree", .module = module },
+                .{ .name = "spice", .module = spice_module },
             },
         }),
     });
@@ -64,6 +78,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "spice", .module = spice_module },
+            },
         }),
     });
     check_step.dependOn(&check.step);
