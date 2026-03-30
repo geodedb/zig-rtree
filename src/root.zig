@@ -10,6 +10,8 @@
 //!
 //! The `RTree` is **not thread-safe**. Callers must synchronize
 //! externally (e.g. with `std.Thread.RwLock`) when sharing across threads.
+//! Alternatively, use `parallel.ConcurrentRTree` for a ready-made wrapper
+//! with `RwLock`-based concurrent read / exclusive write access.
 //!
 //! ## Quick Start
 //!
@@ -36,6 +38,12 @@ const std = @import("std");
 
 /// Library version
 pub const version = "0.1.0";
+
+/// Parallel and concurrent extensions (requires `spice` thread pool).
+///
+/// Provides `parallelSearch`, `ConcurrentRTree`, `bulkInsert`, and
+/// `searchCallback`.
+pub const parallel = @import("parallel.zig");
 
 // ============================================================================
 // Public Types
