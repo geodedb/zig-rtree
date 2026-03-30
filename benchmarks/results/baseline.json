@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "timestamp": "2026-03-30T16:45:17Z",
+  "git_commit": "unknown",
+  "system": { "os": "linux", "arch": "x86_64" },
+  "tiers": [
+    {
+      "name": "1K",
+      "entry_count": 1000,
+      "M": 8,
+      "insert_ops_sec": 663765,
+      "search_ns": 1240,
+      "parallel_search_ns": 759,
+      "bulk_insert_ops_sec": 695698,
+      "remove_ns": 17513,
+      "callback_search_ns": 408,
+      "search_result_count": 49
+    },
+    {
+      "name": "10K",
+      "entry_count": 10000,
+      "M": 8,
+      "insert_ops_sec": 791121,
+      "search_ns": 3560,
+      "parallel_search_ns": 3908,
+      "bulk_insert_ops_sec": 757307,
+      "remove_ns": 58633,
+      "callback_search_ns": 2240,
+      "search_result_count": 441
+    },
+    {
+      "name": "50K",
+      "entry_count": 50000,
+      "M": 16,
+      "insert_ops_sec": 1523940,
+      "search_ns": 16855,
+      "parallel_search_ns": 17966,
+      "bulk_insert_ops_sec": 1363707,
+      "remove_ns": 34175,
+      "callback_search_ns": 8795,
+      "search_result_count": 2025
+    },
+    {
+      "name": "100K",
+      "entry_count": 100000,
+      "M": 32,
+      "insert_ops_sec": 2137885,
+      "search_ns": 31462,
+      "parallel_search_ns": 33579,
+      "bulk_insert_ops_sec": 1670993,
+      "remove_ns": 90480,
+      "callback_search_ns": 16992,
+      "search_result_count": 4096
+    },
+    {
+      "name": "250K",
+      "entry_count": 250000,
+      "M": 32,
+      "insert_ops_sec": 2033478,
+      "search_ns": 59158,
+      "parallel_search_ns": 57606,
+      "bulk_insert_ops_sec": 1783230,
+      "remove_ns": 730210,
+      "callback_search_ns": 40769,
+      "search_result_count": 10201
+    },
+    {
+      "name": "500K",
+      "entry_count": 500000,
+      "M": 64,
+      "insert_ops_sec": 1771117,
+      "search_ns": 99495,
+      "parallel_search_ns": 99445,
+      "bulk_insert_ops_sec": 1432620,
+      "remove_ns": 292029,
+      "callback_search_ns": 53253,
+      "search_result_count": 20164
+    }
+  ]
+}
