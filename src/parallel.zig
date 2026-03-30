@@ -74,51 +74,20 @@ fn parallelSearchNode(task: *spice.Task, args: SearchArgs) void {
         return;
     }
 
-    // Internal node: collect intersecting children.
-    var children: [256]*const RTreeNode = undefined;
-    var n: usize = 0;
+    // Internal node: recurse into intersecting children via task.call().
+    // Spice's heartbeat scheduler automatically distributes queued work
+    // across background threads — each task.call() ticks the heartbeat,
+    // creating opportunities for other workers to steal subtrees.
     for (node.entries.items) |entry| {
         if (entry.mbr.intersects(query)) {
             if (entry.child) |child| {
-                children[n] = child;
-                n += 1;
+                task.call(void, parallelSearchNode, SearchArgs{
+                    .node = child,
+                    .query_mbr = query,
+                    .shared = shared,
+                });
             }
         }
-    }
-
-    if (n == 0) return;
-
-    if (n == 1) {
-        // Single child: just recurse, no fork needed.
-        task.call(void, parallelSearchNode, SearchArgs{
-            .node = children[0],
-            .query_mbr = query,
-            .shared = shared,
-        });
-        return;
-    }
-
-    // Fork the first child to a background worker.
-    var fut = spice.Future(SearchArgs, void).init();
-    const fork_args = SearchArgs{
-        .node = children[0],
-        .query_mbr = query,
-        .shared = shared,
-    };
-    fut.fork(task, parallelSearchNode, fork_args);
-
-    // Process remaining children on this worker.
-    for (children[1..n]) |child| {
-        task.call(void, parallelSearchNode, SearchArgs{
-            .node = child,
-            .query_mbr = query,
-            .shared = shared,
-        });
-    }
-
-    // Join the forked child. If no background worker picked it up, do it here.
-    if (fut.join(task) == null) {
-        task.call(void, parallelSearchNode, fork_args);
     }
 }
 
@@ -289,18 +258,10 @@ fn parallelMergeSort(task: *spice.Task, args: SortArgs) void {
     const mid = items.len / 2;
     const scratch = args.scratch;
 
-    // Fork left half to background worker.
-    var fut = spice.Future(SortArgs, void).init();
-    const left_args = SortArgs{ .items = items[0..mid], .scratch = scratch[0..mid] };
-    fut.fork(task, parallelMergeSort, left_args);
-
-    // Sort right half on this worker.
+    // Sort left and right halves via task.call() — spice's heartbeat
+    // scheduler distributes work across background threads automatically.
+    task.call(void, parallelMergeSort, SortArgs{ .items = items[0..mid], .scratch = scratch[0..mid] });
     task.call(void, parallelMergeSort, SortArgs{ .items = items[mid..], .scratch = scratch[mid..] });
-
-    // Join left half.
-    if (fut.join(task) == null) {
-        task.call(void, parallelMergeSort, left_args);
-    }
 
     // Merge the two sorted halves.
     merge(items, scratch, mid);
