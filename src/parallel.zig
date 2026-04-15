@@ -5,27 +5,29 @@
 //!
 //! This module provides:
 //!
-//! - **`parallelSearch`** — Fan-out subtree searches across a `spice.ThreadPool`
-//!   using heartbeat-scheduled fork/join parallelism.
+//! - **`parallelSearch`** — Fan-out subtree searches across a `ThreadPool`
+//!   using flat chunking with submitBatch/WaitGroup parallelism.
 //! - **`ConcurrentRTree`** — Thread-safe wrapper using `std.Thread.RwLock` for
 //!   concurrent reads and exclusive writes.
 //! - **`bulkInsert`** — Batch insertion that sorts entries spatially and inserts
-//!   in an order that reduces overlap, with parallel sorting via spice.
+//!   in an order that reduces overlap, with parallel sorting via thread-pool.
 //! - **`searchCallback`** — Streaming search that yields results one at a time
 //!   via a caller-provided callback, avoiding full materialization.
 //!
-//! All parallel operations require a `spice.ThreadPool` that has been started.
+//! All parallel operations require a `ThreadPool` that has been initialized.
 //! The underlying `RTree` remains single-threaded; parallelism is layered on
 //! top via these wrappers.
 
 const std = @import("std");
-const spice = @import("spice");
+const tp = @import("thread_pool");
 const root = @import("root.zig");
 
 pub const MBR = root.MBR;
 pub const RTree = root.RTree;
 pub const RTreeEntry = root.RTreeEntry;
 pub const RTreeNode = root.RTreeNode;
+
+const MAX_CHUNKS = 64;
 
 // ============================================================================
 // GAP-P002: Parallel Search
@@ -39,28 +41,18 @@ const SharedResults = struct {
     oom: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
-/// Arguments passed through spice's fork/join to each subtree search.
-const SearchArgs = struct {
+/// Arguments passed to each subtree search task.
+const SearchTaskArgs = struct {
     node: *const RTreeNode,
     query_mbr: MBR,
     shared: *SharedResults,
 };
 
-/// Spice-compatible recursive search function.
-///
-/// At each internal node, forks the first intersecting child to a background
-/// worker and processes the remaining children on the current worker. The
-/// heartbeat scheduler redistributes work across the pool automatically.
-fn parallelSearchNode(task: *spice.Task, args: SearchArgs) void {
-    const node = args.node;
-    const query = args.query_mbr;
-    const shared = args.shared;
-
-    // Early exit if another branch hit OOM.
+/// Recursively search a subtree, appending matching IDs to shared results.
+fn searchSubtree(node: *const RTreeNode, query: MBR, shared: *SharedResults) void {
     if (shared.oom.load(.monotonic)) return;
 
     if (node.is_leaf) {
-        // Leaf: append matching IDs under the mutex.
         shared.mutex.lock();
         defer shared.mutex.unlock();
         for (node.entries.items) |entry| {
@@ -74,32 +66,30 @@ fn parallelSearchNode(task: *spice.Task, args: SearchArgs) void {
         return;
     }
 
-    // Internal node: recurse into intersecting children via task.call().
-    // Spice's heartbeat scheduler automatically distributes queued work
-    // across background threads — each task.call() ticks the heartbeat,
-    // creating opportunities for other workers to steal subtrees.
     for (node.entries.items) |entry| {
         if (entry.mbr.intersects(query)) {
             if (entry.child) |child| {
-                task.call(void, parallelSearchNode, SearchArgs{
-                    .node = child,
-                    .query_mbr = query,
-                    .shared = shared,
-                });
+                searchSubtree(child, query, shared);
             }
         }
     }
 }
 
+/// Task function wrapper for thread-pool dispatch.
+fn searchTaskFn(ctx: *anyopaque, _: *tp.TaskContext) void {
+    const args: *SearchTaskArgs = @ptrCast(@alignCast(ctx));
+    searchSubtree(args.node, args.query_mbr, args.shared);
+}
+
 /// Search the R-tree for all entries intersecting `query_mbr`, distributing
-/// subtree traversals across the spice thread pool.
+/// subtree traversals across the thread pool.
 ///
 /// Results are appended to `results` (which the caller owns). The tree's own
 /// allocator is not used for result storage.
 ///
 /// Returns `error.OutOfMemory` if result accumulation fails.
 pub fn parallelSearch(
-    pool: *spice.ThreadPool,
+    pool: *tp.ThreadPool,
     tree: *const RTree,
     query_mbr: MBR,
     result_allocator: std.mem.Allocator,
@@ -112,11 +102,49 @@ pub fn parallelSearch(
         .allocator = result_allocator,
     };
 
-    pool.call(void, parallelSearchNode, SearchArgs{
-        .node = tree_root,
-        .query_mbr = query_mbr,
-        .shared = &shared,
-    });
+    // Collect top-level intersecting children for parallel dispatch.
+    if (tree_root.is_leaf) {
+        // Single leaf: search directly.
+        searchSubtree(tree_root, query_mbr, &shared);
+        if (shared.oom.load(.monotonic)) return error.OutOfMemory;
+        return;
+    }
+
+    // Gather intersecting children of the root for parallel dispatch.
+    var task_args: [MAX_CHUNKS]SearchTaskArgs = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var n: usize = 0;
+
+    for (tree_root.entries.items) |entry| {
+        if (!entry.mbr.intersects(query_mbr)) continue;
+        const child = entry.child orelse continue;
+        if (n >= MAX_CHUNKS) {
+            // Overflow: search remaining subtrees sequentially.
+            searchSubtree(child, query_mbr, &shared);
+            continue;
+        }
+        task_args[n] = .{ .node = child, .query_mbr = query_mbr, .shared = &shared };
+        batch[n] = .{ .task_fn = searchTaskFn, .ctx = @ptrCast(&task_args[n]) };
+        n += 1;
+    }
+
+    if (n == 0) {
+        if (shared.oom.load(.monotonic)) return error.OutOfMemory;
+        return;
+    }
+
+    var wg = pool.waitGroup();
+    wg.add(@intCast(n));
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        // On submit error: execute remaining tasks sequentially.
+        for (task_args[0..n]) |*args| {
+            searchSubtree(args.node, args.query_mbr, &shared);
+            wg.done();
+        }
+        if (shared.oom.load(.monotonic)) return error.OutOfMemory;
+        return;
+    };
+    wg.wait();
 
     if (shared.oom.load(.monotonic)) return error.OutOfMemory;
 }
@@ -174,10 +202,10 @@ pub const ConcurrentRTree = struct {
         try self.tree.search(query_mbr, result_allocator, results);
     }
 
-    /// Parallel search using spice thread pool (shared lock).
+    /// Parallel search using thread pool (shared lock).
     pub fn parallelSearchWith(
         self: *ConcurrentRTree,
-        pool: *spice.ThreadPool,
+        pool: *tp.ThreadPool,
         query_mbr: MBR,
         result_allocator: std.mem.Allocator,
         results: *std.ArrayList(u64),
@@ -202,7 +230,7 @@ pub const ConcurrentRTree = struct {
     /// Bulk insert entries (exclusive lock).
     pub fn bulkInsertWith(
         self: *ConcurrentRTree,
-        pool: *spice.ThreadPool,
+        pool: *tp.ThreadPool,
         entries: []const BulkEntry,
     ) (RTree.InsertError || error{EmptyInput})!void {
         self.lock.lock();
@@ -238,33 +266,15 @@ fn bulkEntryLessThan(_: void, a: BulkEntry, b: BulkEntry) bool {
     return a_cy < b_cy;
 }
 
-/// Arguments for parallel sort merge via spice.
-const SortArgs = struct {
+/// Arguments for a parallel sort chunk task.
+const SortChunkArgs = struct {
     items: []BulkEntry,
-    scratch: []BulkEntry,
 };
 
-/// Parallel merge-sort using spice fork/join.
-///
-/// Recursively divides the array and forks one half to a background worker.
-/// Base case (len <= 32) uses insertion sort to avoid fork overhead.
-fn parallelMergeSort(task: *spice.Task, args: SortArgs) void {
-    const items = args.items;
-    if (items.len <= 32) {
-        std.mem.sort(BulkEntry, items, {}, bulkEntryLessThan);
-        return;
-    }
-
-    const mid = items.len / 2;
-    const scratch = args.scratch;
-
-    // Sort left and right halves via task.call() — spice's heartbeat
-    // scheduler distributes work across background threads automatically.
-    task.call(void, parallelMergeSort, SortArgs{ .items = items[0..mid], .scratch = scratch[0..mid] });
-    task.call(void, parallelMergeSort, SortArgs{ .items = items[mid..], .scratch = scratch[mid..] });
-
-    // Merge the two sorted halves.
-    merge(items, scratch, mid);
+/// Task function: sort a single chunk using std.mem.sort.
+fn sortChunkFn(ctx: *anyopaque, _: *tp.TaskContext) void {
+    const args: *SortChunkArgs = @ptrCast(@alignCast(ctx));
+    std.mem.sort(BulkEntry, args.items, {}, bulkEntryLessThan);
 }
 
 /// In-place merge using scratch buffer. Merges items[0..mid] and items[mid..].
@@ -293,14 +303,15 @@ fn merge(items: []BulkEntry, scratch: []BulkEntry, mid: usize) void {
 }
 
 /// Bulk-insert entries into the R-tree, sorting spatially first to reduce
-/// overlap and improve tree quality. The sort is parallelized via spice.
+/// overlap and improve tree quality. The sort is parallelized via thread-pool
+/// flat chunking.
 ///
 /// This is faster than N sequential `insert()` calls for large batches because
 /// spatially-ordered insertion produces better node packing and fewer splits.
 ///
 /// Each entry's MBR is validated; invalid entries return `error.InvalidMBR`.
 pub fn bulkInsert(
-    pool: *spice.ThreadPool,
+    pool: *tp.ThreadPool,
     tree: *RTree,
     entries: []const BulkEntry,
 ) (RTree.InsertError || error{EmptyInput})!void {
@@ -316,12 +327,62 @@ pub fn bulkInsert(
     defer tree.allocator.free(sorted);
     @memcpy(sorted, entries);
 
-    // Allocate scratch space for merge sort.
-    const scratch = try tree.allocator.alloc(BulkEntry, entries.len);
-    defer tree.allocator.free(scratch);
+    // Parallel sort: split into up to MAX_CHUNKS chunks, sort each in parallel,
+    // then merge sequentially. Falls back to sequential sort on any error.
+    const num_chunks = @min(MAX_CHUNKS, entries.len);
 
-    // Parallel sort by spatial position.
-    pool.call(void, parallelMergeSort, SortArgs{ .items = sorted, .scratch = scratch });
+    if (num_chunks <= 1) {
+        std.mem.sort(BulkEntry, sorted, {}, bulkEntryLessThan);
+    } else {
+        // Sort each chunk in parallel.
+        var chunk_args: [MAX_CHUNKS]SortChunkArgs = undefined;
+        var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+        const chunk_size = (sorted.len + num_chunks - 1) / num_chunks;
+
+        var actual_chunks: usize = 0;
+        var offset: usize = 0;
+        while (offset < sorted.len) {
+            const end = @min(offset + chunk_size, sorted.len);
+            chunk_args[actual_chunks] = .{ .items = sorted[offset..end] };
+            batch[actual_chunks] = .{ .task_fn = sortChunkFn, .ctx = @ptrCast(&chunk_args[actual_chunks]) };
+            actual_chunks += 1;
+            offset = end;
+        }
+
+        var wg = pool.waitGroup();
+        wg.add(@intCast(actual_chunks));
+        _ = pool.submitBatch(batch[0..actual_chunks], .{ .wait_group = &wg }) catch {
+            // Fallback: sort sequentially.
+            std.mem.sort(BulkEntry, sorted, {}, bulkEntryLessThan);
+            // Drain wg since tasks were not dispatched.
+            var i: usize = 0;
+            while (i < actual_chunks) : (i += 1) wg.done();
+            // Insert in sorted order.
+            for (sorted) |entry| {
+                try tree.insert(entry.mbr, entry.id);
+            }
+            return;
+        };
+        wg.wait();
+
+        // Merge sorted chunks sequentially using a scratch buffer.
+        const scratch = try tree.allocator.alloc(BulkEntry, sorted.len);
+        defer tree.allocator.free(scratch);
+
+        var merge_size: usize = chunk_size;
+        while (merge_size < sorted.len) {
+            var pos: usize = 0;
+            while (pos < sorted.len) {
+                const left_end = @min(pos + merge_size, sorted.len);
+                const right_end = @min(pos + merge_size * 2, sorted.len);
+                if (left_end < right_end) {
+                    merge(sorted[pos..right_end], scratch[pos..right_end], left_end - pos);
+                }
+                pos += merge_size * 2;
+            }
+            merge_size *= 2;
+        }
+    }
 
     // Insert in sorted order — sequential since tree mutation is not thread-safe.
     for (sorted) |entry| {
@@ -340,7 +401,7 @@ pub fn bulkInsert(
 /// early. This avoids allocating a result list when the caller only needs
 /// to process entries one at a time or wants to bail out early.
 ///
-/// This is a single-threaded operation (no spice required).
+/// This is a single-threaded operation (no thread pool required).
 pub fn searchCallback(
     tree: *const RTree,
     query_mbr: MBR,
@@ -401,8 +462,7 @@ test "parallelSearch matches sequential search" {
     try tree.search(query, allocator, &seq_results);
 
     // Parallel search.
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{ .background_worker_count = 2 });
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 2, .min_threads = 2 });
     defer pool.deinit();
 
     var par_results: std.ArrayList(u64) = .empty;
@@ -422,8 +482,7 @@ test "parallelSearch on empty tree" {
     var tree = try RTree.init(allocator, 4);
     defer tree.deinit();
 
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{ .background_worker_count = 1 });
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 1, .min_threads = 1 });
     defer pool.deinit();
 
     var results: std.ArrayList(u64) = .empty;
@@ -463,8 +522,7 @@ test "bulkInsert sorts and inserts correctly" {
     var tree = try RTree.init(allocator, 4);
     defer tree.deinit();
 
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{ .background_worker_count = 2 });
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 2, .min_threads = 2 });
     defer pool.deinit();
 
     const entries = [_]BulkEntry{
@@ -494,8 +552,7 @@ test "bulkInsert rejects invalid MBR" {
     var tree = try RTree.init(allocator, 4);
     defer tree.deinit();
 
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{ .background_worker_count = 1 });
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 1, .min_threads = 1 });
     defer pool.deinit();
 
     const entries = [_]BulkEntry{
@@ -512,8 +569,7 @@ test "bulkInsert rejects empty input" {
     var tree = try RTree.init(allocator, 4);
     defer tree.deinit();
 
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{ .background_worker_count = 1 });
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 1, .min_threads = 1 });
     defer pool.deinit();
 
     const result = bulkInsert(&pool, &tree, &.{});
@@ -599,8 +655,7 @@ test "searchCallback on empty tree" {
 test "parallelMergeSort sorts correctly" {
     const allocator = std.testing.allocator;
 
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{ .background_worker_count = 2 });
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 2, .min_threads = 2 });
     defer pool.deinit();
 
     var items = [_]BulkEntry{
@@ -611,9 +666,42 @@ test "parallelMergeSort sorts correctly" {
         .{ .mbr = .{ .min_x = 7, .min_y = 0, .max_x = 8, .max_y = 1 }, .id = 5 },
     };
 
-    var scratch: [5]BulkEntry = undefined;
+    // Use bulkInsert-style parallel sort: sort chunks then merge.
+    const num_chunks = @min(MAX_CHUNKS, items.len);
+    const chunk_size = (items.len + num_chunks - 1) / num_chunks;
 
-    pool.call(void, parallelMergeSort, SortArgs{ .items = &items, .scratch = &scratch });
+    var chunk_args: [MAX_CHUNKS]SortChunkArgs = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+    var actual_chunks: usize = 0;
+    var offset: usize = 0;
+    while (offset < items.len) {
+        const end = @min(offset + chunk_size, items.len);
+        chunk_args[actual_chunks] = .{ .items = items[offset..end] };
+        batch[actual_chunks] = .{ .task_fn = sortChunkFn, .ctx = @ptrCast(&chunk_args[actual_chunks]) };
+        actual_chunks += 1;
+        offset = end;
+    }
+
+    var wg = pool.waitGroup();
+    wg.add(@intCast(actual_chunks));
+    _ = try pool.submitBatch(batch[0..actual_chunks], .{ .wait_group = &wg });
+    wg.wait();
+
+    // Merge chunks.
+    var scratch: [5]BulkEntry = undefined;
+    var merge_size: usize = chunk_size;
+    while (merge_size < items.len) {
+        var pos: usize = 0;
+        while (pos < items.len) {
+            const left_end = @min(pos + merge_size, items.len);
+            const right_end = @min(pos + merge_size * 2, items.len);
+            if (left_end < right_end) {
+                merge(items[pos..right_end], scratch[pos..right_end], left_end - pos);
+            }
+            pos += merge_size * 2;
+        }
+        merge_size *= 2;
+    }
 
     // Verify sorted by center-x.
     for (0..items.len - 1) |i| {
@@ -640,8 +728,7 @@ test "ConcurrentRTree parallel search" {
         }, @intCast(i));
     }
 
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{ .background_worker_count = 2 });
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 2, .min_threads = 2 });
     defer pool.deinit();
 
     var results: std.ArrayList(u64) = .empty;

@@ -7,12 +7,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Dependency: spice thread pool for parallel operations
-    const spice_dep = b.dependency("spice", .{
+    // Dependency: thread-pool for parallel operations
+    const tp_dep = b.dependency("thread_pool", .{
         .target = target,
         .optimize = optimize,
     });
-    const spice_module = spice_dep.module("spice");
+    const tp_module = tp_dep.module("thread_pool");
 
     // Main library module
     const module = b.addModule("rtree", .{
@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "spice", .module = spice_module },
+            .{ .name = "thread_pool", .module = tp_module },
         },
     });
 
@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "spice", .module = spice_module },
+                .{ .name = "thread_pool", .module = tp_module },
             },
         }),
     });
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "rtree", .module = module },
-                .{ .name = "spice", .module = spice_module },
+                .{ .name = "thread_pool", .module = tp_module },
             },
         }),
     });
@@ -79,7 +79,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "spice", .module = spice_module },
+                .{ .name = "thread_pool", .module = tp_module },
             },
         }),
     });
@@ -91,23 +91,23 @@ pub fn build(b: *std.Build) void {
 
     // Benchmark-specific modules compiled at ReleaseFast to avoid ABI
     // mismatch between the exe and its dependencies.
-    const bench_spice_module = b.dependency("spice", .{
+    const bench_tp_module = b.dependency("thread_pool", .{
         .target = target,
         .optimize = .ReleaseFast,
-    }).module("spice");
+    }).module("thread_pool");
 
     const bench_rtree_module = b.addModule("rtree-bench", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         .imports = &.{
-            .{ .name = "spice", .module = bench_spice_module },
+            .{ .name = "thread_pool", .module = bench_tp_module },
         },
     });
 
     const bench_imports: []const std.Build.Module.Import = &.{
         .{ .name = "rtree", .module = bench_rtree_module },
-        .{ .name = "spice", .module = bench_spice_module },
+        .{ .name = "thread_pool", .module = bench_tp_module },
     };
 
     // Quick benchmark

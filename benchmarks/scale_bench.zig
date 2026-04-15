@@ -12,7 +12,7 @@
 
 const std = @import("std");
 const rtree = @import("rtree");
-const spice = @import("spice");
+const tp = @import("thread_pool");
 const builtin = @import("builtin");
 
 const RTree = rtree.RTree;
@@ -99,7 +99,7 @@ fn searchQuery(count: usize) MBR {
 // Tier runner
 // ---------------------------------------------------------------------------
 
-fn runTier(allocator: std.mem.Allocator, pool: *spice.ThreadPool, tier: Tier) !TierResult {
+fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !TierResult {
     var result = TierResult{
         .name = tier.name,
         .entry_count = tier.entry_count,
@@ -366,8 +366,7 @@ pub fn main() !void {
     // overhead and can segfault under heavy allocation in ReleaseFast.
     const allocator = std.heap.page_allocator;
 
-    var pool = spice.ThreadPool.init(allocator);
-    pool.start(.{});
+    var pool = try tp.ThreadPool.init(allocator, .{});
     defer pool.deinit();
 
     var results: [tiers.len]TierResult = undefined;

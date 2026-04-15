@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const rtree = @import("rtree");
-const spice = @import("spice");
+const tp = @import("thread_pool");
 
 const RTree = rtree.RTree;
 const MBR = rtree.MBR;
@@ -117,8 +117,7 @@ pub fn main() !void {
 
         // --- Parallel Search ---
         {
-            var pool = spice.ThreadPool.init(allocator);
-            pool.start(.{});
+            var pool = try tp.ThreadPool.init(allocator, .{});
             defer pool.deinit();
 
             const query = MBR{ .min_x = 40, .min_y = 40, .max_x = 60, .max_y = 60 };
@@ -186,8 +185,7 @@ pub fn main() !void {
         var tree = try RTree.init(allocator, M);
         defer tree.deinit();
 
-        var pool = spice.ThreadPool.init(allocator);
-        pool.start(.{});
+        var pool = try tp.ThreadPool.init(allocator, .{});
         defer pool.deinit();
 
         const bulk_entries = try allocator.alloc(parallel.BulkEntry, count);

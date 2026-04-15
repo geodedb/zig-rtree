@@ -39,7 +39,7 @@ const std = @import("std");
 /// Library version
 pub const version = "0.1.0";
 
-/// Parallel and concurrent extensions (requires `spice` thread pool).
+/// Parallel and concurrent extensions (requires `thread_pool`).
 ///
 /// Provides `parallelSearch`, `ConcurrentRTree`, `bulkInsert`, and
 /// `searchCallback`.
