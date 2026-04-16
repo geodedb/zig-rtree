@@ -138,13 +138,15 @@ pub fn parallelSearch(
         return;
     }
 
+    // submitBatch() does its own wait_group.add(1) + done(1) per task, so we
+    // don't (and must not) add(n) up front — otherwise wait() hangs because
+    // the counter can never drain to zero.
     var wg = pool.waitGroup();
-    wg.add(@intCast(n));
     _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
-        // On submit error: execute remaining tasks sequentially.
+        // On submit error: no tasks were dispatched, so the pool never
+        // touched the wait group. Run everything sequentially here.
         for (task_args[0..n]) |*args| {
             searchSubtree(args.node, args.query_mbr, &shared);
-            wg.done();
         }
         if (shared.oom.load(.monotonic)) return error.OutOfMemory;
         return;
@@ -354,14 +356,13 @@ pub fn bulkInsert(
             offset = end;
         }
 
+        // submitBatch() does its own add(1)+done(1) per task — no manual
+        // add(n) here (it would double-count and hang wait()).
         var wg = pool.waitGroup();
-        wg.add(@intCast(actual_chunks));
         _ = pool.submitBatch(batch[0..actual_chunks], .{ .wait_group = &wg }) catch {
-            // Fallback: sort sequentially.
+            // Fallback: sort sequentially. Nothing was dispatched to the pool
+            // so the wait group is already untouched.
             std.mem.sort(BulkEntry, sorted, {}, bulkEntryLessThan);
-            // Drain wg since tasks were not dispatched.
-            var i: usize = 0;
-            while (i < actual_chunks) : (i += 1) wg.done();
             // Insert in sorted order.
             for (sorted) |entry| {
                 try tree.insert(entry.mbr, entry.id);
@@ -687,8 +688,8 @@ test "parallelMergeSort sorts correctly" {
         offset = end;
     }
 
+    // submitBatch() itself add(1)+done(1)s each task against the wait group.
     var wg = pool.waitGroup();
-    wg.add(@intCast(actual_chunks));
     _ = try pool.submitBatch(batch[0..actual_chunks], .{ .wait_group = &wg });
     wg.wait();
 
