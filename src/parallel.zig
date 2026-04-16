@@ -7,7 +7,7 @@
 //!
 //! - **`parallelSearch`** — Fan-out subtree searches across a `ThreadPool`
 //!   using flat chunking with submitBatch/WaitGroup parallelism.
-//! - **`ConcurrentRTree`** — Thread-safe wrapper using `std.Thread.RwLock` for
+//! - **`ConcurrentRTree`** — Thread-safe wrapper using `std.Io.RwLock` for
 //!   concurrent reads and exclusive writes.
 //! - **`bulkInsert`** — Batch insertion that sorts entries spatially and inserts
 //!   in an order that reduces overlap, with parallel sorting via thread-pool.
@@ -22,6 +22,11 @@ const std = @import("std");
 const tp = @import("thread_pool");
 const root = @import("root.zig");
 
+/// Obtain a zero-arg Io handle for uncancelable sync primitives.
+inline fn io() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 pub const MBR = root.MBR;
 pub const RTree = root.RTree;
 pub const RTreeEntry = root.RTreeEntry;
@@ -35,7 +40,7 @@ const MAX_CHUNKS = 64;
 
 /// Thread-safe accumulator for parallel search results.
 const SharedResults = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     list: *std.ArrayList(u64),
     allocator: std.mem.Allocator,
     oom: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -53,8 +58,8 @@ fn searchSubtree(node: *const RTreeNode, query: MBR, shared: *SharedResults) voi
     if (shared.oom.load(.monotonic)) return;
 
     if (node.is_leaf) {
-        shared.mutex.lock();
-        defer shared.mutex.unlock();
+        shared.mutex.lockUncancelable(io());
+        defer shared.mutex.unlock(io());
         for (node.entries.items) |entry| {
             if (entry.mbr.intersects(query)) {
                 shared.list.append(shared.allocator, entry.id) catch {
@@ -154,14 +159,14 @@ pub fn parallelSearch(
 // ============================================================================
 
 /// Thread-safe R-tree wrapper providing concurrent read access and exclusive
-/// write access via `std.Thread.RwLock`.
+/// write access via `std.Io.RwLock`.
 ///
 /// Multiple threads may call `search` / `parallelSearch` / `searchCallback`
 /// simultaneously. Calls to `insert`, `remove`, and `bulkInsert` acquire an
 /// exclusive lock.
 pub const ConcurrentRTree = struct {
     tree: RTree,
-    lock: std.Thread.RwLock = .{},
+    lock: std.Io.RwLock = .init,
 
     pub const InitError = RTree.InitError;
     pub const InsertError = RTree.InsertError;
@@ -178,15 +183,15 @@ pub const ConcurrentRTree = struct {
 
     /// Insert a spatial entry (exclusive lock).
     pub fn insert(self: *ConcurrentRTree, mbr: MBR, id: u64) InsertError!void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(io());
+        defer self.lock.unlock(io());
         try self.tree.insert(mbr, id);
     }
 
     /// Remove an entry (exclusive lock).
     pub fn remove(self: *ConcurrentRTree, mbr: MBR, id: u64) RemoveError!bool {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(io());
+        defer self.lock.unlock(io());
         return try self.tree.remove(mbr, id);
     }
 
@@ -197,8 +202,8 @@ pub const ConcurrentRTree = struct {
         result_allocator: std.mem.Allocator,
         results: *std.ArrayList(u64),
     ) !void {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lockSharedUncancelable(io());
+        defer self.lock.unlockShared(io());
         try self.tree.search(query_mbr, result_allocator, results);
     }
 
@@ -210,8 +215,8 @@ pub const ConcurrentRTree = struct {
         result_allocator: std.mem.Allocator,
         results: *std.ArrayList(u64),
     ) !void {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lockSharedUncancelable(io());
+        defer self.lock.unlockShared(io());
         try parallelSearch(pool, &self.tree, query_mbr, result_allocator, results);
     }
 
@@ -222,8 +227,8 @@ pub const ConcurrentRTree = struct {
         context: anytype,
         callback: *const fn (@TypeOf(context), u64) bool,
     ) void {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lockSharedUncancelable(io());
+        defer self.lock.unlockShared(io());
         searchCallback(&self.tree, query_mbr, context, callback);
     }
 
@@ -233,15 +238,15 @@ pub const ConcurrentRTree = struct {
         pool: *tp.ThreadPool,
         entries: []const BulkEntry,
     ) (RTree.InsertError || error{EmptyInput})!void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(io());
+        defer self.lock.unlock(io());
         try bulkInsert(pool, &self.tree, entries);
     }
 
     /// Number of entries in the tree.
     pub fn count(self: *ConcurrentRTree) u64 {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lockSharedUncancelable(io());
+        defer self.lock.unlockShared(io());
         return self.tree.count;
     }
 };

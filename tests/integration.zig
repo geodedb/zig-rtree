@@ -9,6 +9,30 @@
 const std = @import("std");
 const lib = @import("rtree");
 
+/// Minimal Timer shim on top of 0.16.0 `std.Io.Clock.Timestamp` so the existing
+/// benchmarks that rely on the 0.15-era `Timer` API keep working.
+const Timer = struct {
+    started_ns: i128,
+
+    inline fn nowNs() i128 {
+        const _io = std.Io.Threaded.global_single_threaded.io();
+        return std.Io.Clock.Timestamp.now(_io, .awake).raw.nanoseconds;
+    }
+
+    fn start() error{Unsupported}!Timer {
+        return .{ .started_ns = nowNs() };
+    }
+
+    fn read(self: *Timer) u64 {
+        const diff = nowNs() - self.started_ns;
+        return @intCast(@max(diff, 0));
+    }
+
+    fn reset(self: *Timer) void {
+        self.started_ns = nowNs();
+    }
+};
+
 // ============================================================================
 // Functional Tests (ported from Geode test_spatial_index.zig)
 // ============================================================================
@@ -203,7 +227,7 @@ test "integration: spatial index performance" {
     var tree = try lib.RTree.init(allocator, 8);
     defer tree.deinit();
 
-    var timer = try std.time.Timer.start();
+    var timer = try Timer.start();
 
     const grid_size: u64 = 100;
     var x: f64 = 0;

@@ -18,6 +18,25 @@ const parallel = rtree.parallel;
 
 const print = std.debug.print;
 
+/// Minimal Timer shim on top of 0.16.0 `std.Io.Clock.Timestamp`.
+const Timer = struct {
+    started_ns: i128,
+
+    inline fn nowNs() i128 {
+        const _io = std.Io.Threaded.global_single_threaded.io();
+        return std.Io.Clock.Timestamp.now(_io, .awake).raw.nanoseconds;
+    }
+
+    fn start() error{Unsupported}!Timer {
+        return .{ .started_ns = nowNs() };
+    }
+
+    fn read(self: *Timer) u64 {
+        const diff = nowNs() - self.started_ns;
+        return @intCast(@max(diff, 0));
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -84,7 +103,7 @@ pub fn main() !void {
         var tree = try RTree.init(allocator, M);
         defer tree.deinit();
 
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         for (entries) |e| {
             try tree.insert(e.mbr, e.id);
         }
@@ -102,7 +121,7 @@ pub fn main() !void {
             var results: std.ArrayList(u64) = .empty;
             defer results.deinit(allocator);
 
-            var timer2 = try std.time.Timer.start();
+            var timer2 = try Timer.start();
             for (0..iters) |_| {
                 results.clearRetainingCapacity();
                 try tree.search(query, allocator, &results);
@@ -125,7 +144,7 @@ pub fn main() !void {
             var results: std.ArrayList(u64) = .empty;
             defer results.deinit(allocator);
 
-            var timer2 = try std.time.Timer.start();
+            var timer2 = try Timer.start();
             for (0..iters) |_| {
                 results.clearRetainingCapacity();
                 try parallel.parallelSearch(&pool, &tree, query, allocator, &results);
@@ -151,7 +170,7 @@ pub fn main() !void {
                 }
             }.call;
 
-            var timer2 = try std.time.Timer.start();
+            var timer2 = try Timer.start();
             for (0..iters) |_| {
                 var counter = Counter{};
                 parallel.searchCallback(&tree, query, &counter, cb);
@@ -167,7 +186,7 @@ pub fn main() !void {
         // --- Remove ---
         {
             const remove_count = count / 2;
-            var timer2 = try std.time.Timer.start();
+            var timer2 = try Timer.start();
             for (entries[0..remove_count]) |e| {
                 _ = try tree.remove(e.mbr, e.id);
             }
@@ -194,7 +213,7 @@ pub fn main() !void {
             bulk_entries[i] = .{ .mbr = e.mbr, .id = e.id };
         }
 
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         try parallel.bulkInsert(&pool, &tree, bulk_entries);
         const elapsed = timer.read();
         const f = formatNs(elapsed);

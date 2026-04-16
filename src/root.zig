@@ -9,7 +9,7 @@
 //! backed by a classic R-tree with configurable branching factor.
 //!
 //! The `RTree` is **not thread-safe**. Callers must synchronize
-//! externally (e.g. with `std.Thread.RwLock`) when sharing across threads.
+//! externally (e.g. with `std.Io.RwLock`) when sharing across threads.
 //! Alternatively, use `parallel.ConcurrentRTree` for a ready-made wrapper
 //! with `RwLock`-based concurrent read / exclusive write access.
 //!
@@ -158,7 +158,7 @@ pub const RTreeNode = struct {
 /// Nodes split when they exceed `M` entries. `M` must be >= 2.
 ///
 /// **Thread safety:** This type is not thread-safe. Concurrent access from
-/// multiple threads requires external synchronization (e.g. `std.Thread.RwLock`).
+/// multiple threads requires external synchronization (e.g. `std.Io.RwLock`).
 pub const RTree = struct {
     allocator: std.mem.Allocator,
     root: ?*RTreeNode,

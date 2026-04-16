@@ -21,6 +21,25 @@ const parallel = rtree.parallel;
 
 const print = std.debug.print;
 
+/// Minimal Timer shim on top of 0.16.0 `std.Io.Clock.Timestamp`.
+const Timer = struct {
+    started_ns: i128,
+
+    inline fn nowNs() i128 {
+        const _io = std.Io.Threaded.global_single_threaded.io();
+        return std.Io.Clock.Timestamp.now(_io, .awake).raw.nanoseconds;
+    }
+
+    fn start() error{Unsupported}!Timer {
+        return .{ .started_ns = nowNs() };
+    }
+
+    fn read(self: *Timer) u64 {
+        const diff = nowNs() - self.started_ns;
+        return @intCast(@max(diff, 0));
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Scale tier definitions
 // ---------------------------------------------------------------------------
@@ -110,13 +129,13 @@ fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !Tier
     defer allocator.free(entries);
 
     const query = searchQuery(tier.entry_count);
-    var tier_timer = try std.time.Timer.start();
+    var tier_timer = try Timer.start();
 
     // --- Sequential Insert ---
     var tree = try RTree.init(allocator, tier.M);
     defer tree.deinit();
     {
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         for (entries) |e| {
             try tree.insert(e.mbr, e.id);
         }
@@ -136,7 +155,7 @@ fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !Tier
         var results_list: std.ArrayList(u64) = .empty;
         defer results_list.deinit(allocator);
 
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         for (0..tier.search_iters) |_| {
             results_list.clearRetainingCapacity();
             try tree.search(query, allocator, &results_list);
@@ -157,7 +176,7 @@ fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !Tier
         var results_list: std.ArrayList(u64) = .empty;
         defer results_list.deinit(allocator);
 
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         for (0..tier.search_iters) |_| {
             results_list.clearRetainingCapacity();
             try parallel.parallelSearch(pool, &tree, query, allocator, &results_list);
@@ -182,7 +201,7 @@ fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !Tier
             }
         }.call;
 
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         for (0..tier.search_iters) |_| {
             var counter = Counter{};
             parallel.searchCallback(&tree, query, &counter, cb);
@@ -200,7 +219,7 @@ fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !Tier
     // --- Remove (1000 entries — fixed count avoids excessive condensation at large scale) ---
     {
         const remove_count = @min(tier.entry_count / 10, 1000);
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         for (entries[0..remove_count]) |e| {
             _ = try tree.remove(e.mbr, e.id);
         }
@@ -214,7 +233,7 @@ fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !Tier
 
     // --- Bulk Insert ---
     {
-        var timer = try std.time.Timer.start();
+        var timer = try Timer.start();
         try parallel.bulkInsert(pool, &tree, entries);
         const elapsed = timer.read();
         result.bulk_insert_ops_sec = @as(f64, @floatFromInt(tier.entry_count)) /
@@ -229,13 +248,14 @@ fn runTier(allocator: std.mem.Allocator, pool: *tp.ThreadPool, tier: Tier) !Tier
 // ---------------------------------------------------------------------------
 
 const StdoutWriter = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     buf: [8192]u8 = undefined,
-    writer: ?std.fs.File.Writer = null,
+    writer: ?std.Io.File.Writer = null,
 
     /// Must be called after the struct is in its final stack location.
     fn open(self: *StdoutWriter) void {
-        self.writer = self.file.writer(&self.buf);
+        const _io = std.Io.Threaded.global_single_threaded.io();
+        self.writer = self.file.writer(_io, &self.buf);
     }
 
     fn writeAll(self: *StdoutWriter, data: []const u8) !void {
@@ -260,8 +280,9 @@ fn writeJsonOutput(out: *StdoutWriter, results: []const TierResult) !void {
     try out.writeAll("  \"version\": 1,\n");
 
     // Timestamp
-    const ts = std.time.timestamp();
-    const epoch_secs: u64 = @intCast(ts);
+    const _io = std.Io.Threaded.global_single_threaded.io();
+    const now_ts = std.Io.Clock.Timestamp.now(_io, .real);
+    const epoch_secs: u64 = @intCast(@divTrunc(now_ts.raw.nanoseconds, std.time.ns_per_s));
     const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
     const day_secs = es.getDaySeconds();
     const year_day = es.getEpochDay().calculateYearDay();
@@ -378,7 +399,7 @@ pub fn main() !void {
 
     writeSummary(&results);
 
-    var out = StdoutWriter{ .file = .{ .handle = std.posix.STDOUT_FILENO } };
+    var out = StdoutWriter{ .file = .{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } } };
     out.open();
     try writeJsonOutput(&out, &results);
 }

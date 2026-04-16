@@ -89,13 +89,20 @@ const metrics = [_]Metric{
 // ---------------------------------------------------------------------------
 
 fn readJsonFile(allocator: std.mem.Allocator, path: []const u8) !BenchResult {
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+    const _io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(_io, path, .{}) catch |err| {
         print("Error: cannot open '{s}': {s}\n", .{ path, @errorName(err) });
         return err;
     };
-    defer file.close();
+    defer file.close(_io);
 
-    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    // Read file into buffer
+    var read_buf: [4096]u8 = undefined;
+    var rdr = file.reader(_io, &read_buf);
+    const content = rdr.interface.readAllAlloc(allocator, 10 * 1024 * 1024) catch |err| {
+        print("Error: failed to read '{s}': {s}\n", .{ path, @errorName(err) });
+        return err;
+    };
     defer allocator.free(content);
 
     const parsed = std.json.parseFromSlice(BenchResult, allocator, content, .{
