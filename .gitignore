@@ -49,3 +49,6 @@ coverage/
 *.gcda
 *.gcno
 zig-pkg/
+
+# Local git worktrees (per-feature isolated checkouts)
+.worktrees/
