@@ -95,6 +95,45 @@ make ci     # clean + build + all tests
 
 See the [docs](docs/) directory for detailed documentation.
 
+## Observability
+
+rtree ships an opt-in OpenTelemetry seam. Build with
+`-Dwith_otel=true` to compile in instrumentation; the default
+(`-Dwith_otel=false`) leaves every span site as a comptime no-op so
+the optimizer eliminates the entry/exit calls and the `otel`
+dependency is never fetched.
+
+Each public R-tree operation emits exactly one span per call, named
+`rtree.{operation}` (e.g. `rtree.insert`, `rtree.search`,
+`rtree.delete`, `rtree.bulk_load`) with the OpenTelemetry `db.*`
+semantic-convention attributes plus an rtree-specific result count:
+
+- `db.system     = "rtree"`
+- `db.operation  = <method>` (e.g. `insert`, `search`, `delete`,
+  `bulk_load`)
+- `rtree.results = <count>` (entries inserted/matched/removed; 0 for
+  the void-returning `searchCallback` variant)
+
+Bounding-box coordinates are intentionally NOT attached to spans —
+geo coordinates can be sensitive and the seam carries only the
+operation name and result cardinality.
+
+```bash
+zig build test                  # default: -Dwith_otel=false (no-op)
+zig build test -Dwith_otel=true # otel compiled in, spans emitted
+```
+
+When enabled, the consumer's process bootstrap calls
+`rtree.observability_init.Otel.init(allocator, "service-name")` and
+parks the returned value at a stable address (a `var` in `main` or
+a heap allocation), then calls `installGlobals(&that_value)` so the
+seam can publish its tracer pointer. Span emission is non-fatal:
+every emit is `catch {}`-discarded so a failed exporter cannot
+propagate into spatial-index operations.
+
+For the full integration recipe and template files, see
+`otel/docs/integration/RECIPE.md` in the otel repo.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
