@@ -21,6 +21,10 @@
 const std = @import("std");
 const tp = @import("thread_pool");
 const root = @import("root.zig");
+// OTEL seam — when -Dwith_otel=false this resolves to a struct of
+// comptime no-ops the optimizer eliminates. Imported via the named
+// module (build.zig wires "observability" -> src/observability.zig).
+const observability = @import("observability");
 
 /// Obtain a zero-arg Io handle for uncancelable sync primitives.
 inline fn io() std.Io {
@@ -100,7 +104,17 @@ pub fn parallelSearch(
     result_allocator: std.mem.Allocator,
     results: *std.ArrayList(u64),
 ) error{OutOfMemory}!void {
-    const tree_root = tree.root orelse return;
+    // OTEL seam: one span per public parallel-search call. Same
+    // `"rtree.search"` name as the sequential variant — the parallel
+    // dispatch is an implementation detail, not a separate operation.
+    var __obs_span = observability.startSpatialOpSpan("search");
+    defer __obs_span.end(null);
+    errdefer observability.endSpatialOpSpan(__obs_span, false, results.items.len);
+
+    const tree_root = tree.root orelse {
+        observability.endSpatialOpSpan(__obs_span, true, 0);
+        return;
+    };
 
     var shared = SharedResults{
         .list = results,
@@ -112,6 +126,7 @@ pub fn parallelSearch(
         // Single leaf: search directly.
         searchSubtree(tree_root, query_mbr, &shared);
         if (shared.oom.load(.monotonic)) return error.OutOfMemory;
+        observability.endSpatialOpSpan(__obs_span, true, results.items.len);
         return;
     }
 
@@ -135,6 +150,7 @@ pub fn parallelSearch(
 
     if (n == 0) {
         if (shared.oom.load(.monotonic)) return error.OutOfMemory;
+        observability.endSpatialOpSpan(__obs_span, true, results.items.len);
         return;
     }
 
@@ -149,11 +165,13 @@ pub fn parallelSearch(
             searchSubtree(args.node, args.query_mbr, &shared);
         }
         if (shared.oom.load(.monotonic)) return error.OutOfMemory;
+        observability.endSpatialOpSpan(__obs_span, true, results.items.len);
         return;
     };
     wg.wait();
 
     if (shared.oom.load(.monotonic)) return error.OutOfMemory;
+    observability.endSpatialOpSpan(__obs_span, true, results.items.len);
 }
 
 // ============================================================================
@@ -322,6 +340,15 @@ pub fn bulkInsert(
     tree: *RTree,
     entries: []const BulkEntry,
 ) (RTree.InsertError || error{EmptyInput})!void {
+    // OTEL seam: one OUTER span for the whole bulk load. The inner
+    // `tree.insert` calls would each emit their own `rtree.insert`
+    // span, but those are children of this parent span when otel is
+    // enabled (the tracer's context propagation handles the parenting
+    // implicitly via the active span on the caller's task).
+    var __obs_span = observability.startSpatialOpSpan("bulk_load");
+    defer __obs_span.end(null);
+    errdefer observability.endSpatialOpSpan(__obs_span, false, 0);
+
     if (entries.len == 0) return error.EmptyInput;
 
     // Validate all MBRs before sorting.
@@ -367,6 +394,7 @@ pub fn bulkInsert(
             for (sorted) |entry| {
                 try tree.insert(entry.mbr, entry.id);
             }
+            observability.endSpatialOpSpan(__obs_span, true, sorted.len);
             return;
         };
         wg.wait();
@@ -394,6 +422,7 @@ pub fn bulkInsert(
     for (sorted) |entry| {
         try tree.insert(entry.mbr, entry.id);
     }
+    observability.endSpatialOpSpan(__obs_span, true, sorted.len);
 }
 
 // ============================================================================
@@ -414,9 +443,17 @@ pub fn searchCallback(
     context: anytype,
     callback: *const fn (@TypeOf(context), u64) bool,
 ) void {
+    // OTEL seam: one span per public callback-search call. This API
+    // returns `void` (no error union) and we cannot intercept the
+    // per-callback yield count from here, so `result_count` is
+    // reported as `0` — callers needing cardinality should use
+    // `search()` or wrap with their own counter callback.
+    var __obs_span = observability.startSpatialOpSpan("search");
+    defer __obs_span.end(null);
     if (tree.root) |tree_root| {
         _ = searchNodeCallback(tree_root, query_mbr, context, callback);
     }
+    observability.endSpatialOpSpan(__obs_span, true, 0);
 }
 
 /// Recursive callback search returning false to stop.

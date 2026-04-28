@@ -226,6 +226,14 @@ pub const RTree = struct {
     /// Returns `error.InvalidMBR` if any coordinate is NaN, Infinity,
     /// or if min > max on either axis.
     pub fn insert(self: *RTree, mbr: MBR, id: u64) InsertError!void {
+        // OTEL seam: one span per public insert call. `defer end(null)`
+        // is idempotent w.r.t. the explicit `endSpatialOpSpan` below
+        // (only the first status write wins) and guarantees the span
+        // is closed even on the early `error.InvalidMBR` path.
+        var __obs_span = observability.startSpatialOpSpan("insert");
+        defer __obs_span.end(null);
+        errdefer observability.endSpatialOpSpan(__obs_span, false, 0);
+
         if (!mbr.isValid()) return error.InvalidMBR;
 
         if (self.root == null) {
@@ -247,6 +255,7 @@ pub const RTree = struct {
         }
 
         self.count += 1;
+        observability.endSpatialOpSpan(__obs_span, true, 1);
     }
 
     fn createNode(self: *RTree, is_leaf: bool, level: u16) !*RTreeNode {
@@ -431,9 +440,18 @@ pub const RTree = struct {
     /// `results` list — the tree does not use its own allocator for
     /// result storage.
     pub fn search(self: *const RTree, query_mbr: MBR, result_allocator: std.mem.Allocator, results: *std.ArrayList(u64)) !void {
+        // OTEL seam: one span per OUTER search call. We deliberately do
+        // NOT span individual node visits inside `searchNode` — that
+        // would generate one span per intersecting subtree per call,
+        // swamping the trace exporter on hot queries.
+        var __obs_span = observability.startSpatialOpSpan("search");
+        defer __obs_span.end(null);
+        errdefer observability.endSpatialOpSpan(__obs_span, false, results.items.len);
+
         if (self.root) |root| {
             try self.searchNode(root, query_mbr, result_allocator, results);
         }
+        observability.endSpatialOpSpan(__obs_span, true, results.items.len);
     }
 
     fn searchNode(self: *const RTree, node: *RTreeNode, query_mbr: MBR, result_allocator: std.mem.Allocator, results: *std.ArrayList(u64)) !void {
@@ -452,7 +470,17 @@ pub const RTree = struct {
     /// Returns true if found and removed. Underfull nodes are condensed
     /// by reinserting their entries.
     pub fn remove(self: *RTree, mbr: MBR, id: u64) RemoveError!bool {
-        if (self.root == null) return false;
+        // OTEL seam: one span per public delete call. `result_count`
+        // on success carries 1 (removed) or 0 (not found); the boolean
+        // return preserves the original API.
+        var __obs_span = observability.startSpatialOpSpan("delete");
+        defer __obs_span.end(null);
+        errdefer observability.endSpatialOpSpan(__obs_span, false, 0);
+
+        if (self.root == null) {
+            observability.endSpatialOpSpan(__obs_span, true, 0);
+            return false;
+        }
 
         var orphans: std.ArrayList(RTreeEntry) = .empty;
         defer orphans.deinit(self.allocator);
@@ -481,9 +509,11 @@ pub const RTree = struct {
                 try self.reinsertLeafEntry(orphan.mbr, orphan.id);
             }
 
+            observability.endSpatialOpSpan(__obs_span, true, 1);
             return true;
         }
 
+        observability.endSpatialOpSpan(__obs_span, true, 0);
         return false;
     }
 
