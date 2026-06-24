@@ -1,6 +1,6 @@
 .{
     .name = .rtree,
-    .version = "0.1.8",
+    .version = "0.1.9",
     .fingerprint = 0xd34ac5721f5c8a90,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -14,8 +14,8 @@
         // behind `-Dwith_otel=true`. Default builds therefore never
         // download or compile otel.
         .otel = .{
-            .url = "git+https://gitlab.com/devnw/zig/otel.git#v0.1.16",
-            .hash = "otel-0.1.16-B0v3lrz2NQC0EFK30-AxgOnqY6nk34zAtax1JZbZ6YFS",
+            .url = "git+https://gitlab.com/devnw/zig/otel.git#v0.1.17",
+            .hash = "otel-0.1.17-B0v3lvT2NQAYURxdLxS-8cMcAqL8Qfniddlwq1ai86G7",
             .lazy = true,
         },
     },
