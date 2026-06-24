@@ -1,6 +1,6 @@
 .{
     .name = .rtree,
-    .version = "0.1.5",
+    .version = "0.1.7",
     .fingerprint = 0xd34ac5721f5c8a90,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
