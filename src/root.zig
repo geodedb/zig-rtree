@@ -37,7 +37,7 @@
 const std = @import("std");
 
 /// Library version
-pub const version = "0.1.16";
+pub const version = "0.1.17";
 
 /// Parallel and concurrent extensions (requires `thread_pool`).
 ///
