@@ -278,5 +278,5 @@ test "integration: spatial index performance" {
 }
 
 test "integration: version is defined" {
-    try std.testing.expectEqualStrings("0.1.0", lib.version);
+    try std.testing.expectEqualStrings("0.1.15", lib.version);
 }

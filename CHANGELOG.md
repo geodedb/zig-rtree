@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Unreleased]: https://gitlab.com/devnw/zig/rtree/-/compare/v0.1.0...HEAD
 [0.1.0]: https://gitlab.com/devnw/zig/rtree/-/releases/v0.1.0
 
+## [0.1.12] - 2026-09-15
+
+### Changed
+
+- Converge grpc_zig v0.1.10 (GAP-0838 diamond sync).
+
 ## [0.1.11] - 2026-09-12
 
 ### Changed
