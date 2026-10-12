@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-10-12
+
+### Changed
+
+- Pin OTEL v0.1.27 to converge the final dependency graph after its CI header-provisioning fix. Runtime algorithms and benchmark budgets remain unchanged.
+
 ### Added
 
 - Core R-tree spatial index: `MBR`, `RTreeEntry`, `RTreeNode`, `RTree`
